@@ -37,6 +37,22 @@ def _log_action(action: str, profile_url: str, result: dict):
 X_BASE = "https://x.com"
 
 
+class RateLimitedError(Exception):
+    """Raised when X shows the 'Sorry, you are rate limited' toast."""
+    pass
+
+
+async def _check_rate_limited(page) -> bool:
+    try:
+        toast = page.locator('[data-testid="toast"]').first
+        if await toast.count() == 0:
+            return False
+        text = (await toast.inner_text()).lower()
+        return "rate limited" in text
+    except Exception:
+        return False
+
+
 def username_from_url(url_or_handle: str) -> str:
     s = url_or_handle.strip()
     if s.startswith("@"):
@@ -160,14 +176,34 @@ async def _is_protected_profile(page) -> bool:
         return False
 
 
-async def _find_profile_action_button(page):
-    """Return the primary follow/unfollow/pending button on a profile page, or None."""
-    selectors = [
-        '[data-testid$="-follow"]',
-        '[data-testid$="-unfollow"]',
-        '[data-testid$="-cancel"]',
-    ]
-    for sel in selectors:
+async def _find_profile_action_button(page, username: str | None = None):
+    """Return the *profile header* follow/unfollow/pending button, or None.
+
+    Profile pages also render follow buttons in sidebar "Who to follow" widgets
+    and inline "You might like" carousels — selecting `[data-testid$=-follow]`
+    naively would pick one of those. We anchor by aria-label including the
+    target @username (the profile button uses "Follow @user" / "Following @user"
+    / "Follow back @user"), then fall back to primaryColumn-scoped selectors.
+    """
+    if username:
+        u = username.lstrip("@")
+        # aria-label uses the user's display-cased handle; X tends to preserve
+        # case but URL handles can differ. Match case-insensitively via XPath.
+        xpath = (
+            f'//button[contains(translate(@aria-label, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "@{u.lower()}")]'
+        )
+        loc = page.locator(f'xpath={xpath}').first
+        try:
+            if await loc.count() > 0:
+                return loc
+        except Exception:
+            pass
+
+    for sel in [
+        '[data-testid="primaryColumn"] [data-testid$="-unfollow"]',
+        '[data-testid="primaryColumn"] [data-testid$="-follow"]',
+        '[data-testid="primaryColumn"] [data-testid$="-cancel"]',
+    ]:
         loc = page.locator(sel).first
         if await loc.count() > 0:
             return loc
@@ -189,6 +225,25 @@ async def _button_state(button) -> str:
     return "unknown"
 
 
+async def get_follow_state(page, profile_url: str) -> str:
+    """Visit a profile and return 'follow', 'unfollow', 'pending', 'private', or 'unknown'."""
+    username = username_from_url(profile_url)
+    await page.goto(profile_url, wait_until="domcontentloaded")
+    await human_delay(1.2, 2.4)
+    if await _is_protected_profile(page):
+        # Could still have a Follow/Pending button — check anyway.
+        btn = await _find_profile_action_button(page, username)
+        if btn:
+            s = await _button_state(btn)
+            if s != "unknown":
+                return s
+        return "private"
+    btn = await _find_profile_action_button(page, username)
+    if not btn:
+        return "unknown"
+    return await _button_state(btn)
+
+
 async def follow_user(page, profile_url: str, skip_private: bool = True) -> dict:
     """Navigate to a profile and click Follow. Returns {ok, status, reason}."""
     result = await _follow_user_impl(page, profile_url, skip_private)
@@ -197,13 +252,14 @@ async def follow_user(page, profile_url: str, skip_private: bool = True) -> dict
 
 
 async def _follow_user_impl(page, profile_url: str, skip_private: bool) -> dict:
+    username = username_from_url(profile_url)
     await page.goto(profile_url, wait_until="domcontentloaded")
     await human_delay(1.5, 3.0)
 
     if skip_private and await _is_protected_profile(page):
         return {"ok": False, "status": "skipped", "reason": "private"}
 
-    btn = await _find_profile_action_button(page)
+    btn = await _find_profile_action_button(page, username)
     if not btn:
         await dump_page(page, "follow-no-button", force=True)
         return {"ok": False, "status": "error", "reason": "follow button not found"}
@@ -220,15 +276,20 @@ async def _follow_user_impl(page, profile_url: str, skip_private: bool) -> dict:
         await btn.scroll_into_view_if_needed()
         await human_delay(0.3, 0.9)
         await btn.click()
-        await human_delay(1.2, 2.2)
     except Exception as e:
         return {"ok": False, "status": "error", "reason": f"click failed: {e}"}
 
-    # Re-check button to confirm transition.
-    after = await _find_profile_action_button(page)
-    after_state = await _button_state(after) if after else "unknown"
-    if after_state in ("unfollow", "pending"):
-        return {"ok": True, "status": "followed", "reason": after_state}
+    # Poll for either the rate-limit toast or a button transition.
+    after_state = "unknown"
+    for _ in range(10):
+        await asyncio.sleep(0.7)
+        if await _check_rate_limited(page):
+            return {"ok": False, "status": "rate_limited",
+                    "reason": "X rate-limited follow action"}
+        after = await _find_profile_action_button(page, username)
+        after_state = await _button_state(after) if after else "unknown"
+        if after_state in ("unfollow", "pending"):
+            return {"ok": True, "status": "followed", "reason": after_state}
     return {"ok": False, "status": "error", "reason": f"state after click: {after_state}"}
 
 
@@ -239,10 +300,11 @@ async def unfollow_user(page, profile_url: str) -> dict:
 
 
 async def _unfollow_user_impl(page, profile_url: str) -> dict:
+    username = username_from_url(profile_url)
     await page.goto(profile_url, wait_until="domcontentloaded")
     await human_delay(1.5, 3.0)
 
-    btn = await _find_profile_action_button(page)
+    btn = await _find_profile_action_button(page, username)
     if not btn:
         await dump_page(page, "unfollow-no-button", force=True)
         return {"ok": False, "status": "error", "reason": "action button not found"}
@@ -271,7 +333,7 @@ async def _unfollow_user_impl(page, profile_url: str) -> dict:
     except Exception:
         pass
 
-    after = await _find_profile_action_button(page)
+    after = await _find_profile_action_button(page, username)
     after_state = await _button_state(after) if after else "unknown"
     if after_state == "follow":
         return {"ok": True, "status": "unfollowed", "reason": ""}

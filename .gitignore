@@ -1,6 +1,7 @@
 data/
 html-examples/
 .claude/
+goals/
 __pycache__/
 *.pyc
 .venv/

@@ -10,6 +10,7 @@ from twitter import (
     unfollow_user,
     username_from_url,
 )
+from churn import run_churn, run_reconcile
 
 
 async def _with_browser(headless: bool, fn):
@@ -100,6 +101,13 @@ def build_parser():
     sp = sub.add_parser("unfollow", help="unfollow a user by profile URL")
     sp.add_argument("profile_url")
 
+    sp = sub.add_parser("churn", help="run the full churn flow (unfollow stale + follow new)")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="don't follow/unfollow anything — just print what would happen")
+
+    sp = sub.add_parser("reconcile",
+                        help="re-check every status=error follow entry and rewrite the log to match actual state")
+
     return p
 
 
@@ -112,6 +120,12 @@ def main(argv=None):
     if args.command == "login":
         asyncio.run(login_session())
         return 0
+
+    if args.command == "churn":
+        return asyncio.run(run_churn(dry_run=bool(args.dry_run), headful=bool(args.headful))) or 0
+
+    if args.command == "reconcile":
+        return asyncio.run(run_reconcile(headful=bool(args.headful))) or 0
 
     handlers = {
         "followers": cmd_followers,
