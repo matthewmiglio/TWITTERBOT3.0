@@ -38,6 +38,33 @@ from twitter import (
 )
 
 X_BASE = "https://x.com"
+LOGS_DIR = os.path.join(os.path.dirname(ACTIONS_LOG), "..", "logs")
+LOGS_DIR = os.path.abspath(LOGS_DIR)
+
+
+class _SessionLogger:
+    """Tee print()-style messages to stdout AND a per-session log file."""
+
+    def __init__(self, prefix: str):
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        self.path = os.path.join(LOGS_DIR, f"{prefix}-{ts}.log")
+        self._fh = open(self.path, "a", encoding="utf-8")
+
+    def log(self, msg: str = ""):
+        line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')}  {msg}"
+        print(msg)
+        try:
+            self._fh.write(line + "\n")
+            self._fh.flush()
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            self._fh.close()
+        except Exception:
+            pass
 
 
 # ----------------------------- log parsing -----------------------------
@@ -235,19 +262,30 @@ async def run_reconcile(headful: bool = False) -> int:
 
 
 async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
+    logger = _SessionLogger("churn")
+    log = logger.log
+    try:
+        return await _run_churn_impl(log, dry_run=dry_run, headful=headful)
+    finally:
+        log(f"[churn] session log written to {logger.path}")
+        logger.close()
+
+
+async def _run_churn_impl(log, dry_run: bool, headful: bool) -> int:
     actions = load_actions()
     now = _now()
     follows_last_hour = successful_follow_count_since(actions, now - timedelta(hours=1))
     follows_last_day = successful_follow_count_since(actions, now - timedelta(days=1))
 
-    print(f"[churn] follows in last hour: {follows_last_hour}/{config.MAX_FOLLOWS_PER_HOUR}")
-    print(f"[churn] follows in last day:  {follows_last_day}/{config.MAX_FOLLOWS_PER_DAY}")
+    log(f"[churn] dry_run={dry_run} headful={headful}")
+    log(f"[churn] follows in last hour: {follows_last_hour}/{config.MAX_FOLLOWS_PER_HOUR}")
+    log(f"[churn] follows in last day:  {follows_last_day}/{config.MAX_FOLLOWS_PER_DAY}")
 
     if follows_last_hour >= config.MAX_FOLLOWS_PER_HOUR:
-        print("[churn] hourly follow cap reached — quitting.")
+        log("[churn] hourly follow cap reached -- quitting.")
         return 0
     if follows_last_day >= config.MAX_FOLLOWS_PER_DAY:
-        print("[churn] daily follow cap reached — quitting.")
+        log("[churn] daily follow cap reached -- quitting.")
         return 0
 
     hour_room = config.MAX_FOLLOWS_PER_HOUR - follows_last_hour
@@ -256,21 +294,21 @@ async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
 
     stale = stale_follows(actions, config.MAX_FOLLOW_AGE_DAYS)
     unfollow_budget = min(config.MAX_UNFOLLOWS_PER_RUN, len(stale))
-    print(f"[churn] stale follows eligible to unfollow: {len(stale)} (will do up to {unfollow_budget})")
-    print(f"[churn] follow budget this run: {follow_budget}")
+    log(f"[churn] stale follows eligible to unfollow: {len(stale)} (will do up to {unfollow_budget})")
+    log(f"[churn] follow budget this run: {follow_budget}")
 
     if dry_run:
-        print("[churn] --- DRY RUN ---")
-        print(f"[churn] would unfollow {unfollow_budget}:")
+        log("[churn] --- DRY RUN ---")
+        log(f"[churn] would unfollow {unfollow_budget}:")
         for s in stale[:unfollow_budget]:
             age = (now - s["followed_at"]).days
-            print(f"          {s['profile_url']}  (followed {age}d ago)")
+            log(f"          {s['profile_url']}  (followed {age}d ago)")
 
     pw, context, page = await launch_browser(headless=not headful)
     try:
         await page.goto(f"{X_BASE}/home", wait_until="domcontentloaded")
         if not await check_login_status(page):
-            print("[churn] not logged in — run: python src/main.py login")
+            log("[churn] not logged in -- run: python src/main.py login")
             return 2
 
         # --------- Unfollow phase ---------
@@ -279,9 +317,9 @@ async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
             age = (now - s["followed_at"]).days
             if dry_run:
                 continue
-            print(f"[churn] unfollow {s['profile_url']} (followed {age}d ago)")
+            log(f"[churn] unfollow {s['profile_url']} (followed {age}d ago)")
             result = await unfollow_user(page, s["profile_url"])
-            print(f"          ->{result}")
+            log(f"          ->{result}")
             unfollowed += 1 if result.get("status") == "unfollowed" else 0
             await _sleep_between(config.SECONDS_BETWEEN_UNFOLLOWS)
 
@@ -289,15 +327,15 @@ async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
         already = already_acted_usernames(load_actions())  # re-read after unfollows
         already.add(config.MY_USERNAME.lower())
 
-        print(f"[churn] mining followers of @{config.MY_USERNAME} (top {config.SEED_FOLLOWERS_TOP_X})")
+        log(f"[churn] mining followers of @{config.MY_USERNAME} (top {config.SEED_FOLLOWERS_TOP_X})")
         seeds = await list_followers(page, config.MY_USERNAME, max_users=config.SEED_FOLLOWERS_TOP_X)
         seeds = [s for s in seeds if not s["is_private"]]
-        print(f"[churn] got {len(seeds)} seed accounts")
+        log(f"[churn] got {len(seeds)} seed accounts")
 
         candidates: list[dict] = []
         seen = set()
         for seed in seeds:
-            print(f"[churn] mining followers of @{seed['username']} (top {config.PER_SEED_FOLLOWERS_TOP_Y})")
+            log(f"[churn] mining followers of @{seed['username']} (top {config.PER_SEED_FOLLOWERS_TOP_Y})")
             sub = await list_followers(page, seed["username"], max_users=config.PER_SEED_FOLLOWERS_TOP_Y)
             for r in sub:
                 u = r["username"].lower()
@@ -307,12 +345,12 @@ async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
                 candidates.append(r)
             await human_delay(1.0, 2.5)
 
-        print(f"[churn] {len(candidates)} fresh candidates after dedup/filter")
+        log(f"[churn] {len(candidates)} fresh candidates after dedup/filter")
 
         if dry_run:
-            print(f"[churn] would follow up to {follow_budget}:")
+            log(f"[churn] would follow up to {follow_budget}:")
             for c in candidates[:follow_budget]:
-                print(f"          {c['profile_url']}")
+                log(f"          {c['profile_url']}")
             return 0
 
         followed = 0
@@ -322,23 +360,23 @@ async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
             # Re-check live rate limits before each click in case of long runs.
             acts = load_actions()
             if successful_follow_count_since(acts, _now() - timedelta(hours=1)) >= config.MAX_FOLLOWS_PER_HOUR:
-                print("[churn] hourly cap hit mid-run — stopping follows.")
+                log("[churn] hourly cap hit mid-run -- stopping follows.")
                 break
             if successful_follow_count_since(acts, _now() - timedelta(days=1)) >= config.MAX_FOLLOWS_PER_DAY:
-                print("[churn] daily cap hit mid-run — stopping follows.")
+                log("[churn] daily cap hit mid-run -- stopping follows.")
                 break
 
-            print(f"[churn] follow {c['profile_url']}")
+            log(f"[churn] follow {c['profile_url']}")
             result = await follow_user(page, c["profile_url"], skip_private=True)
-            print(f"          ->{result}")
+            log(f"          ->{result}")
             if result.get("status") == "rate_limited":
-                print("[churn] X says we're rate-limited. Stopping follow loop for this session.")
+                log("[churn] X says we're rate-limited. Stopping follow loop for this session.")
                 break
             if result.get("status") == "followed":
                 followed += 1
             await _sleep_between(config.SECONDS_BETWEEN_FOLLOWS)
 
-        print(f"[churn] done. unfollowed={unfollowed}, followed={followed}")
+        log(f"[churn] done. unfollowed={unfollowed}, followed={followed}")
         return 0
     finally:
         try:

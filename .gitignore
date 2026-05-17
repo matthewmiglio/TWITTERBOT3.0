@@ -2,6 +2,7 @@ data/
 html-examples/
 .claude/
 goals/
+logs/
 __pycache__/
 *.pyc
 .venv/
