@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "twitterbot3"
+version = "0.1.0"
+description = "Playwright-driven Twitter/X follow bot with persistent profile"
+authors = ["matt <matmigg0804@gmail.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+playwright = "^1.59"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

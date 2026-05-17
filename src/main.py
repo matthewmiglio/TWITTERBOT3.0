@@ -1,0 +1,127 @@
+import argparse
+import asyncio
+import sys
+
+from browser import launch_browser, login_session, check_login_status, set_debug
+from twitter import (
+    list_followers,
+    list_following,
+    follow_user,
+    unfollow_user,
+    username_from_url,
+)
+
+
+async def _with_browser(headless: bool, fn):
+    pw, context, page = await launch_browser(headless=headless)
+    try:
+        await page.goto("https://x.com/home", wait_until="domcontentloaded")
+        if not await check_login_status(page):
+            print("Not logged in. Run: python src/main.py login", file=sys.stderr)
+            return 2
+        return await fn(page)
+    finally:
+        try:
+            await context.close()
+        except Exception:
+            pass
+        await pw.stop()
+
+
+async def cmd_followers(args):
+    user = username_from_url(args.username)
+
+    async def run(page):
+        rows = await list_followers(page, user, max_users=args.max)
+        for r in rows:
+            if r["is_private"]:
+                continue
+            print(r["profile_url"])
+        print(f"# {len([r for r in rows if not r['is_private']])} public ({len(rows)} total)", file=sys.stderr)
+        return 0
+
+    return await _with_browser(args.headful is False, run)
+
+
+async def cmd_following(args):
+    user = username_from_url(args.username)
+
+    async def run(page):
+        rows = await list_following(page, user, max_users=args.max)
+        for r in rows:
+            if r["is_private"]:
+                continue
+            print(r["profile_url"])
+        print(f"# {len([r for r in rows if not r['is_private']])} public ({len(rows)} total)", file=sys.stderr)
+        return 0
+
+    return await _with_browser(args.headful is False, run)
+
+
+async def cmd_follow(args):
+    async def run(page):
+        result = await follow_user(page, args.profile_url, skip_private=not args.include_private)
+        print(result)
+        return 0 if result["ok"] else 1
+
+    return await _with_browser(args.headful is False, run)
+
+
+async def cmd_unfollow(args):
+    async def run(page):
+        result = await unfollow_user(page, args.profile_url)
+        print(result)
+        return 0 if result["ok"] else 1
+
+    return await _with_browser(args.headful is False, run)
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="twitterbot3")
+    p.add_argument("--debug", action="store_true", help="dump HTML + screenshots to data/debug/")
+    p.add_argument("--headful", action="store_true", help="show the browser window")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    sp = sub.add_parser("login", help="one-time interactive login")
+
+    sp = sub.add_parser("followers", help="list followers of a user")
+    sp.add_argument("username")
+    sp.add_argument("--max", type=int, default=None)
+
+    sp = sub.add_parser("following", help="list who a user follows")
+    sp.add_argument("username")
+    sp.add_argument("--max", type=int, default=None)
+
+    sp = sub.add_parser("follow", help="follow a user by profile URL")
+    sp.add_argument("profile_url")
+    sp.add_argument("--include-private", action="store_true",
+                    help="also send follow request to private accounts")
+
+    sp = sub.add_parser("unfollow", help="unfollow a user by profile URL")
+    sp.add_argument("profile_url")
+
+    return p
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    set_debug(bool(args.debug))
+
+    if args.command == "login":
+        asyncio.run(login_session())
+        return 0
+
+    handlers = {
+        "followers": cmd_followers,
+        "following": cmd_following,
+        "follow": cmd_follow,
+        "unfollow": cmd_unfollow,
+    }
+    fn = handlers[args.command]
+    return asyncio.run(fn(args)) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
