@@ -21,6 +21,12 @@ SAMPLE = {
     "total_unfollowed": 4,
     "cron_runs": 12,
     "account": "whatsaplat",
+    "followers": "1,872",
+    "following": "943",
+    "followers_delta": "(0)",
+    "following_delta": "(+8)",
+    "followers_delta_color": "#71767b",
+    "following_delta_color": "#00ba7c",
 }
 
 

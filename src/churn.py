@@ -35,6 +35,7 @@ from twitter import (
     unfollow_user,
     username_from_url,
     get_follow_state,
+    get_profile_counts,
 )
 from emailer import send_report
 
@@ -265,13 +266,19 @@ async def run_reconcile(headful: bool = False) -> int:
 async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
     logger = _SessionLogger("churn")
     log = logger.log
-    stats = {"followed": 0, "unfollowed": 0}
+    stats = {"followed": 0, "unfollowed": 0, "followers": None, "following": None}
     try:
         exit_code = await _run_churn_impl(log, stats, dry_run=dry_run, headful=headful)
     finally:
         log(f"[churn] session log written to {logger.path}")
         if not dry_run:
-            result = send_report(stats["followed"], stats["unfollowed"])
+            log(f"[churn] profile counts: followers={stats['followers']} following={stats['following']}")
+            result = send_report(
+                stats["followed"],
+                stats["unfollowed"],
+                followers=stats["followers"],
+                following=stats["following"],
+            )
             log(f"[churn] email send: {result.get('ok')} ({result.get('status') or result.get('error')})")
         logger.close()
     return exit_code
@@ -316,6 +323,15 @@ async def _run_churn_impl(log, stats: dict, dry_run: bool, headful: bool) -> int
         if not await check_login_status(page):
             log("[churn] not logged in -- run: python src/main.py login")
             return 2
+
+        # --------- Profile counts ---------
+        try:
+            counts = await get_profile_counts(page, config.MY_USERNAME)
+            stats["followers"] = counts.get("followers")
+            stats["following"] = counts.get("following")
+            log(f"[churn] profile @{config.MY_USERNAME}: followers={stats['followers']} following={stats['following']}")
+        except Exception as e:
+            log(f"[churn] profile counts scrape failed: {e}")
 
         # --------- Unfollow phase ---------
         for s in stale[:unfollow_budget]:

@@ -15,8 +15,58 @@ from urllib import error, request
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / ".env"
 ACTIONS_LOG = ROOT / "data" / "actions.log"
+PROFILE_COUNTS_FILE = ROOT / "data" / "profile_counts.json"
 LOGS_DIR = ROOT / "logs"
 TEMPLATE_PATH = Path(__file__).resolve().parent / "email_template.html"
+
+
+def _load_last_counts() -> dict:
+    if not PROFILE_COUNTS_FILE.exists():
+        return {}
+    try:
+        return json.loads(PROFILE_COUNTS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_last_counts(followers: int | None, following: int | None) -> None:
+    PROFILE_COUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "followers": followers,
+        "following": following,
+        "ts": datetime.now().isoformat(timespec="seconds"),
+    }
+    PROFILE_COUNTS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _fmt_count(n) -> str:
+    if n is None:
+        return "—"
+    try:
+        return f"{int(n):,}"
+    except Exception:
+        return str(n)
+
+
+def _fmt_delta(curr, prev) -> str:
+    if curr is None or prev is None:
+        return "(—)"
+    d = int(curr) - int(prev)
+    if d > 0:
+        return f"(+{d:,})"
+    if d < 0:
+        return f"({d:,})"
+    return "(0)"
+
+
+def _delta_color(curr, prev, positive_good: bool = True) -> str:
+    if curr is None or prev is None:
+        return "#71767b"
+    d = int(curr) - int(prev)
+    if d == 0:
+        return "#71767b"
+    good = (d > 0) == positive_good
+    return "#00ba7c" if good else "#f4212e"
 
 
 def load_env():
@@ -62,7 +112,15 @@ def _count_cron_runs() -> int:
     return sum(1 for _ in LOGS_DIR.glob("cron-wrapper-*.log"))
 
 
-def gather_stats(session_followed: int, session_unfollowed: int) -> dict:
+def gather_stats(
+    session_followed: int,
+    session_unfollowed: int,
+    followers: int | None = None,
+    following: int | None = None,
+) -> dict:
+    last = _load_last_counts()
+    prev_followers = last.get("followers")
+    prev_following = last.get("following")
     return {
         "greeting": _greeting(),
         "now": datetime.now().strftime("%H:%M:%S %m/%d/%Y"),
@@ -71,6 +129,12 @@ def gather_stats(session_followed: int, session_unfollowed: int) -> dict:
         "total_followed": _count_actions("follow", "followed"),
         "total_unfollowed": _count_actions("unfollow", "unfollowed"),
         "cron_runs": _count_cron_runs(),
+        "followers": _fmt_count(followers),
+        "following": _fmt_count(following),
+        "followers_delta": _fmt_delta(followers, prev_followers),
+        "following_delta": _fmt_delta(following, prev_following),
+        "followers_delta_color": _delta_color(followers, prev_followers, positive_good=True),
+        "following_delta_color": _delta_color(following, prev_following, positive_good=True),
     }
 
 
@@ -126,7 +190,18 @@ def send_email(html: str, subject: str | None = None) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def send_report(session_followed: int, session_unfollowed: int, name: str = "Matthew") -> dict:
-    stats = gather_stats(session_followed, session_unfollowed)
+def send_report(
+    session_followed: int,
+    session_unfollowed: int,
+    followers: int | None = None,
+    following: int | None = None,
+    name: str = "Matthew",
+) -> dict:
+    stats = gather_stats(session_followed, session_unfollowed, followers=followers, following=following)
     html = render_html(stats, name=name)
-    return send_email(html)
+    result = send_email(html)
+    # Persist current counts so the next run can compute deltas. Only save when
+    # we actually scraped numbers — otherwise we'd clobber valid history.
+    if followers is not None or following is not None:
+        _save_last_counts(followers, following)
+    return result

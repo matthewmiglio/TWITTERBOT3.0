@@ -131,6 +131,61 @@ async def _scroll_and_collect(page, max_users: int | None = None) -> list[dict]:
     return items
 
 
+def _parse_count(s: str) -> int | None:
+    """Parse '3,341' / '1.2K' / '4.5M' / '12B' into an int."""
+    if not s:
+        return None
+    s = s.strip().replace(",", "")
+    m = re.match(r"^([0-9]*\.?[0-9]+)\s*([KMB]?)$", s, re.IGNORECASE)
+    if not m:
+        return None
+    n = float(m.group(1))
+    suffix = m.group(2).upper()
+    mult = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}[suffix]
+    return int(n * mult)
+
+
+async def get_profile_counts(page, username: str) -> dict:
+    """Visit /{username} and scrape follower + following counts.
+
+    Returns {"followers": int|None, "following": int|None}.
+    """
+    u = username.lstrip("@")
+    url = f"{X_BASE}/{u}"
+    await page.goto(url, wait_until="domcontentloaded")
+    await human_delay(1.5, 3.0)
+    try:
+        await page.wait_for_selector(
+            f'a[href="/{u}/verified_followers"], a[href="/{u}/followers"], a[href="/{u}/following"]',
+            timeout=10_000,
+        )
+    except Exception:
+        pass
+
+    async def _read(href_candidates):
+        for href in href_candidates:
+            loc = page.locator(f'a[href="{href}"]').first
+            try:
+                if await loc.count() == 0:
+                    continue
+                # The first span inside the anchor holds the visible number.
+                span = loc.locator("span span").first
+                if await span.count() == 0:
+                    txt = (await loc.inner_text()).split()[0]
+                else:
+                    txt = await span.inner_text()
+                n = _parse_count(txt)
+                if n is not None:
+                    return n
+            except Exception:
+                continue
+        return None
+
+    followers = await _read([f"/{u}/verified_followers", f"/{u}/followers"])
+    following = await _read([f"/{u}/following"])
+    return {"followers": followers, "following": following}
+
+
 async def list_followers(page, username: str, max_users: int | None = None) -> list[dict]:
     """Visit /{username}/followers and scrape rows. Returns [{username, profile_url, is_private}]."""
     url = f"{X_BASE}/{username}/followers"

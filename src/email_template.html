@@ -33,6 +33,22 @@
                 {{greeting}}, {{name}}
               </div>
 
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#71767b;text-transform:uppercase;padding-bottom:10px;border-bottom:1px solid #2f3336;">Profile</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;">
+                <tr>
+                  <td style="padding:14px 0;font-size:15px;color:#e7e9ea;">Followers</td>
+                  <td align="right" style="padding:14px 0;font-size:18px;font-weight:800;color:#e7e9ea;">
+                    {{followers}}&nbsp;&nbsp;<span style="font-size:14px;font-weight:700;color:{{followers_delta_color}};">{{followers_delta}}</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:14px 0;font-size:15px;color:#e7e9ea;border-top:1px solid #2f3336;">Following</td>
+                  <td align="right" style="padding:14px 0;font-size:18px;font-weight:800;color:#e7e9ea;border-top:1px solid #2f3336;">
+                    {{following}}&nbsp;&nbsp;<span style="font-size:14px;font-weight:700;color:{{following_delta_color}};">{{following_delta}}</span>
+                  </td>
+                </tr>
+              </table>
+
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#71767b;text-transform:uppercase;padding-bottom:10px;border-bottom:1px solid #2f3336;">This session</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;">
                 <tr>
