@@ -20,6 +20,7 @@ SAMPLE = {
     "total_followed": 23,
     "total_unfollowed": 4,
     "cron_runs": 12,
+    "account": "whatsaplat",
 }
 
 

@@ -74,14 +74,25 @@ def gather_stats(session_followed: int, session_unfollowed: int) -> dict:
     }
 
 
+def _account_handle() -> str:
+    try:
+        import config as _cfg
+        return getattr(_cfg, "MY_USERNAME", "unknown")
+    except Exception:
+        return "unknown"
+
+
 def render_html(stats: dict, name: str = "Matthew") -> str:
     tmpl = TEMPLATE_PATH.read_text(encoding="utf-8")
-    for key, val in {**stats, "name": name}.items():
+    ctx = {**stats, "name": name, "account": _account_handle()}
+    for key, val in ctx.items():
         tmpl = tmpl.replace("{{" + key + "}}", str(val))
     return tmpl
 
 
-def send_email(html: str, subject: str = "TwitterBot Report") -> dict:
+def send_email(html: str, subject: str | None = None) -> dict:
+    if subject is None:
+        subject = f"TwitterBot Report — @{_account_handle()}"
     load_env()
     api_key = os.environ.get("RESEND_API_KEY")
     sender = os.environ.get("EMAIL_FROM")
