@@ -3,6 +3,8 @@ html-examples/
 .claude/
 goals/
 logs/
+cron/
+.env
 __pycache__/
 *.pyc
 .venv/

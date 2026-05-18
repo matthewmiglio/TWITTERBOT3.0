@@ -36,6 +36,7 @@ from twitter import (
     username_from_url,
     get_follow_state,
 )
+from emailer import send_report
 
 X_BASE = "https://x.com"
 LOGS_DIR = os.path.join(os.path.dirname(ACTIONS_LOG), "..", "logs")
@@ -264,14 +265,19 @@ async def run_reconcile(headful: bool = False) -> int:
 async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
     logger = _SessionLogger("churn")
     log = logger.log
+    stats = {"followed": 0, "unfollowed": 0}
     try:
-        return await _run_churn_impl(log, dry_run=dry_run, headful=headful)
+        exit_code = await _run_churn_impl(log, stats, dry_run=dry_run, headful=headful)
     finally:
         log(f"[churn] session log written to {logger.path}")
+        if not dry_run:
+            result = send_report(stats["followed"], stats["unfollowed"])
+            log(f"[churn] email send: {result.get('ok')} ({result.get('status') or result.get('error')})")
         logger.close()
+    return exit_code
 
 
-async def _run_churn_impl(log, dry_run: bool, headful: bool) -> int:
+async def _run_churn_impl(log, stats: dict, dry_run: bool, headful: bool) -> int:
     actions = load_actions()
     now = _now()
     follows_last_hour = successful_follow_count_since(actions, now - timedelta(hours=1))
@@ -312,7 +318,6 @@ async def _run_churn_impl(log, dry_run: bool, headful: bool) -> int:
             return 2
 
         # --------- Unfollow phase ---------
-        unfollowed = 0
         for s in stale[:unfollow_budget]:
             age = (now - s["followed_at"]).days
             if dry_run:
@@ -320,7 +325,8 @@ async def _run_churn_impl(log, dry_run: bool, headful: bool) -> int:
             log(f"[churn] unfollow {s['profile_url']} (followed {age}d ago)")
             result = await unfollow_user(page, s["profile_url"])
             log(f"          ->{result}")
-            unfollowed += 1 if result.get("status") == "unfollowed" else 0
+            if result.get("status") == "unfollowed":
+                stats["unfollowed"] += 1
             await _sleep_between(config.SECONDS_BETWEEN_UNFOLLOWS)
 
         # --------- Discovery phase ---------
@@ -353,9 +359,8 @@ async def _run_churn_impl(log, dry_run: bool, headful: bool) -> int:
                 log(f"          {c['profile_url']}")
             return 0
 
-        followed = 0
         for c in candidates:
-            if followed >= follow_budget:
+            if stats["followed"] >= follow_budget:
                 break
             # Re-check live rate limits before each click in case of long runs.
             acts = load_actions()
@@ -373,10 +378,10 @@ async def _run_churn_impl(log, dry_run: bool, headful: bool) -> int:
                 log("[churn] X says we're rate-limited. Stopping follow loop for this session.")
                 break
             if result.get("status") == "followed":
-                followed += 1
+                stats["followed"] += 1
             await _sleep_between(config.SECONDS_BETWEEN_FOLLOWS)
 
-        log(f"[churn] done. unfollowed={unfollowed}, followed={followed}")
+        log(f"[churn] done. unfollowed={stats['unfollowed']}, followed={stats['followed']}")
         return 0
     finally:
         try:
