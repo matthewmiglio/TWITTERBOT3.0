@@ -1,6 +1,10 @@
 # TwitterBot3
 
-Playwright-driven X/Twitter bot with a persistent browser profile.
+Playwright-driven X/Twitter follow/unfollow churn bot with a persistent
+browser profile. Every churn run uploads its results to Supabase so progress
+can be tracked over time from the
+[`SoundCloudTwitterBotsDashboard`](../SoundCloudTwitterBotsDashboard) Next.js
+dashboard.
 
 ## Setup
 
@@ -9,13 +13,24 @@ poetry install
 poetry run playwright install chromium
 ```
 
+Create a `.env` at the repo root (gitignored):
+
+```env
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role-jwt>
+```
+
+The service-role key is required because the bot writes to RLS-protected
+tables. Never commit `.env` — it is in `.gitignore`.
+
 ## One-time login
 
 ```bash
 poetry run python src/main.py login
 ```
 
-A headful Chromium opens to x.com/login. Sign in (with 2FA if needed), then close the window. The session is now persisted in `data/browser_profile/`.
+A headful Chromium opens to x.com/login. Sign in (with 2FA if needed), then
+close the window. The session is persisted in `data/browser_profile/`.
 
 ## Commands
 
@@ -81,3 +96,31 @@ handle, rate limits, follow age, batch sizes, and pacing. Defaults are
 conservative.
 
 Safe to run on a cron (e.g. hourly) since the log makes it idempotent.
+
+## Supabase reporting
+
+At the end of every non-dry-run `churn` invocation, `src/supabase_client.py`
+posts to two PostgREST tables in the shared project
+`rxwdtssnaymiebnhudix.supabase.co`:
+
+- **`twitter_actions`** — every follow/unfollow attempt from this session
+  (account, ts, action, status, ok, profile_url, username, reason). A unique
+  constraint on `(account, ts, profile_url, action)` makes the upload
+  idempotent.
+- **`twitter_runs`** — one row per cron invocation summarising
+  `session_followed`, `session_unfollowed`, current `profile_followers` /
+  `profile_following`, and `exit_code`.
+
+The `account` column is taken from `config.MY_USERNAME`, so this bot and any
+sibling clone (e.g. `TwitterBot3-1` authed as a different X account) both
+write to the same tables and the dashboard separates them by account.
+
+Email reporting (Resend) was removed — the dashboard replaces it.
+
+## Cron
+
+A scheduled task `TwitterBot3-Churn` (created with `schtasks`) runs
+`cron/run-churn.ps1` every 3 hours, which adds 0-2h random jitter and then
+calls `poetry run python src/main.py churn`. Three sibling tasks
+(`TwitterBot3-Churn`, `TwitterBot3-1-Churn`, `SoundCloudBot3-Churn`) are
+staggered (`:00`, `:30`, `:15`) so they don't overlap.
