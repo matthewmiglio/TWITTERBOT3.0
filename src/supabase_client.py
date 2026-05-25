@@ -96,3 +96,17 @@ def upload_run(run: dict) -> dict:
     path = _runs_table() + "?on_conflict=account,started_at"
     return _post(path, [run],
                  prefer="resolution=merge-duplicates,return=minimal")
+
+
+def upload_error(err: dict) -> dict:
+    """Best-effort error row insert. Never raises -- callers should ignore
+    failures since the bot itself is already in an error path.
+
+    Caller supplies: account, source, kind, message, and optionally
+    exit_code, traceback, run_started_at, context. The `bot` column is
+    derived from BOT_KIND so the dashboard can pair errors with runs.
+    """
+    body = {**err, "bot": BOT_KIND}
+    path = "bot_errors?on_conflict=bot,account,ts,source,kind,message"
+    return _post(path, [body],
+                 prefer="resolution=merge-duplicates,return=minimal")

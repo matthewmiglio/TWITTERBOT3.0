@@ -19,6 +19,7 @@ import json
 import os
 import random
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -37,7 +38,7 @@ from twitter import (
     get_follow_state,
     get_profile_counts,
 )
-from supabase_client import upload_actions, upload_run
+from supabase_client import upload_actions, upload_run, upload_error
 
 X_BASE = "https://x.com"
 LOGS_DIR = os.path.join(os.path.dirname(ACTIONS_LOG), "..", "logs")
@@ -272,9 +273,40 @@ async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
              "followed_urls": [], "unfollowed_urls": []}
     try:
         exit_code = await _run_churn_impl(log, stats, dry_run=dry_run, headful=headful)
+    except Exception as e:
+        tb = traceback.format_exc()
+        log(f"[churn] CRASH: {type(e).__name__}: {e}")
+        log(tb)
+        if not dry_run:
+            try:
+                upload_error({
+                    "account":        config.MY_USERNAME,
+                    "source":         "churn",
+                    "kind":           "crash",
+                    "exit_code":      1,
+                    "message":        f"{type(e).__name__}: {e}",
+                    "traceback":      tb,
+                    "run_started_at": started_at.isoformat(),
+                })
+            except Exception:
+                pass
     finally:
         log(f"[churn] session log written to {logger.path}")
         if not dry_run:
+            if exit_code in (2, 3):
+                try:
+                    upload_error({
+                        "account":        config.MY_USERNAME,
+                        "source":         "churn",
+                        "kind":           "session_expired" if exit_code == 2 else "captcha",
+                        "exit_code":      exit_code,
+                        "message":        ("session expired -- needs reauth"
+                                           if exit_code == 2 else
+                                           "captcha detected, aborted run"),
+                        "run_started_at": started_at.isoformat(),
+                    })
+                except Exception:
+                    pass
             log(f"[churn] profile counts: followers={stats['followers']} following={stats['following']}")
             new_rows = [
                 {

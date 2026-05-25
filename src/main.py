@@ -138,4 +138,25 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException as _e:
+        # Startup / unhandled crash above the churn try/except. Best-effort
+        # upload so the dashboard sees the failure even if the bot exits hard.
+        import traceback as _tb
+        try:
+            from supabase_client import upload_error
+            from config import MY_USERNAME
+            upload_error({
+                "account":   MY_USERNAME,
+                "source":    "main",
+                "kind":      "startup",
+                "exit_code": 1,
+                "message":   f"{type(_e).__name__}: {_e}",
+                "traceback": _tb.format_exc(),
+            })
+        except Exception:
+            pass
+        raise
