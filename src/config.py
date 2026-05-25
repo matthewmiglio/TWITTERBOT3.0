@@ -1,7 +1,10 @@
-"""Churn flow configuration. Edit these values to tune the bot."""
+"""Churn flow configuration. Edit these values to tune the bot.
 
-# Your X handle (no @). Used as the seed account whose followers we mine.
-MY_USERNAME = "whatsaplat"
+NOTE: the bot's own X handle is *not* here -- it lives in data/profile.json
+(per-clone, gitignored) and is read via src/identity.py. Keeping tunables
+separate from identity means this file is byte-identical between clones
+and won't drift on `git pull`.
+"""
 
 # --- Rate limits ---
 # Hard caps on follow actions. If either is exceeded based on actions.log,
@@ -16,7 +19,7 @@ MAX_FOLLOW_AGE_DAYS = 10
 MAX_UNFOLLOWS_PER_RUN = 10
 
 # --- Discovery (2-layer-deep follower mining) ---
-# Layer 1: pull this many of MY_USERNAME's followers as "seeds".
+# Layer 1: pull this many of the bot's own followers as "seeds".
 SEED_FOLLOWERS_TOP_X = 25
 # Layer 2: for each seed, pull this many of their followers as candidates.
 PER_SEED_FOLLOWERS_TOP_Y = 20

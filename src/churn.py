@@ -39,6 +39,7 @@ from twitter import (
     get_profile_counts,
 )
 from supabase_client import upload_actions, upload_run, upload_error
+from identity import get_username
 
 X_BASE = "https://x.com"
 LOGS_DIR = os.path.join(os.path.dirname(ACTIONS_LOG), "..", "logs")
@@ -280,7 +281,7 @@ async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
         if not dry_run:
             try:
                 upload_error({
-                    "account":        config.MY_USERNAME,
+                    "account":        get_username(),
                     "source":         "churn",
                     "kind":           "crash",
                     "exit_code":      1,
@@ -296,7 +297,7 @@ async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
             if exit_code in (2, 3):
                 try:
                     upload_error({
-                        "account":        config.MY_USERNAME,
+                        "account":        get_username(),
                         "source":         "churn",
                         "kind":           "session_expired" if exit_code == 2 else "captcha",
                         "exit_code":      exit_code,
@@ -310,7 +311,7 @@ async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
             log(f"[churn] profile counts: followers={stats['followers']} following={stats['following']}")
             new_rows = [
                 {
-                    "account":     config.MY_USERNAME,
+                    "account":     get_username(),
                     "ts":          a["timestamp"],
                     "action":      a.get("action"),
                     "status":      a.get("status"),
@@ -325,7 +326,7 @@ async def run_churn(dry_run: bool = False, headful: bool = False) -> int:
             r1 = upload_actions(new_rows)
             log(f"[churn] supabase actions upload: ok={r1.get('ok')} status={r1.get('status') or r1.get('error')} rows={len(new_rows)}")
             r2 = upload_run({
-                "account":            config.MY_USERNAME,
+                "account":            get_username(),
                 "started_at":         started_at.isoformat(),
                 "finished_at":        _now().isoformat(),
                 "session_followed":   stats["followed"],
@@ -381,10 +382,10 @@ async def _run_churn_impl(log, stats: dict, dry_run: bool, headful: bool) -> int
 
         # --------- Profile counts ---------
         try:
-            counts = await get_profile_counts(page, config.MY_USERNAME)
+            counts = await get_profile_counts(page, get_username())
             stats["followers"] = counts.get("followers")
             stats["following"] = counts.get("following")
-            log(f"[churn] profile @{config.MY_USERNAME}: followers={stats['followers']} following={stats['following']}")
+            log(f"[churn] profile @{get_username()}: followers={stats['followers']} following={stats['following']}")
         except Exception as e:
             log(f"[churn] profile counts scrape failed: {e}")
 
@@ -403,10 +404,10 @@ async def _run_churn_impl(log, stats: dict, dry_run: bool, headful: bool) -> int
 
         # --------- Discovery phase ---------
         already = already_acted_usernames(load_actions())  # re-read after unfollows
-        already.add(config.MY_USERNAME.lower())
+        already.add(get_username().lower())
 
-        log(f"[churn] mining followers of @{config.MY_USERNAME} (top {config.SEED_FOLLOWERS_TOP_X})")
-        seeds = await list_followers(page, config.MY_USERNAME, max_users=config.SEED_FOLLOWERS_TOP_X)
+        log(f"[churn] mining followers of @{get_username()} (top {config.SEED_FOLLOWERS_TOP_X})")
+        seeds = await list_followers(page, get_username(), max_users=config.SEED_FOLLOWERS_TOP_X)
         seeds = [s for s in seeds if not s["is_private"]]
         log(f"[churn] got {len(seeds)} seed accounts")
 
